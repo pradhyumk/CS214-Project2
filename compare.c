@@ -22,7 +22,7 @@ struct llnode {
 
 
 void printList(struct llnode* list) {
-    printf("Printing List\n");
+    printf("Words List\n");
 
     if (list == NULL) {
         printf("NULL LIST\n");
@@ -31,7 +31,7 @@ void printList(struct llnode* list) {
     struct llnode* pointer = list;
 
     while (pointer != NULL) {
-        printf("%s | %d\t--> ", pointer->word, pointer->occurence);
+        printf("%s | %d  -->  ", pointer->word, pointer->occurence);
         pointer = pointer->next;
     }
 
@@ -61,32 +61,55 @@ int sb_append(struct strbuff_t* sb, char item) {
 
 struct llnode* insertNode(struct llnode* list, struct strbuff_t* sb) {
     if (list == NULL) { // nothing is the list currently
-    
         list = malloc(sizeof(struct llnode));
-        list->occurence = 0;
+        list->occurence = 1;
         list->next = NULL;
         list->word = malloc(sizeof(char) * (sb->used + 1));
         strncpy(list->word, sb->data, (sb->used + 1));
 
-        //printf("After adding node: %s\n", list->word);
-        //printList(list);
         return list;
     } // Something is in the list
 
+    // bat hat india jacket
     struct llnode* curr = list;
+    struct llnode* prev = NULL;
 
-    while (curr->next != NULL) { // get to the last node
-        curr = curr->next;
+    while (curr != NULL) { // chceking for same word; it there is, increase occurence and return
+        if (strcmp(sb->data, curr->word) == 0) {
+            curr->occurence++;
+            return list;
+        } else if (strcmp(sb->data, curr->word) < 0) { // the word being compared is less than
+            struct llnode* tempHead = malloc(sizeof(struct llnode));
+            tempHead->occurence = 1;
+            tempHead->word = malloc(sizeof(char) * (sb->used + 1));
+            strncpy(tempHead->word, sb->data, (sb->used + 1));
+
+            if (prev == NULL) { // entering at the head
+                tempHead->next = curr;
+                list = tempHead;
+                return list;
+            }
+
+            // adding in the middle
+            prev->next = tempHead;
+            tempHead->next = curr;
+            return list;
+        } else { // the word being compared is greater than
+            prev = curr;
+
+            if (curr->next == NULL) { // havent added the word yet, so have to add it at the end
+                struct llnode* tempHead = malloc(sizeof(struct llnode));
+                tempHead->occurence = 1;
+                tempHead->next = NULL;
+                tempHead->word = malloc(sizeof(char) * (sb->used + 1));
+                strncpy(tempHead->word, sb->data, (sb->used + 1));
+                curr->next = tempHead;
+                return list;
+            }
+
+            curr = curr->next;
+        }
     }
-    
-
-    struct llnode* t = malloc(sizeof(struct llnode));
-    t->occurence = 0;
-    t->next = NULL;
-    t->word = malloc(sizeof(char) * (sb->used + 1));
-    strncpy(t->word, sb->data, (sb->used + 1));
-
-    curr->next = t;
 
     return list;
 }
@@ -99,7 +122,7 @@ struct strbuff_t* charArray(int fd, struct  strbuff_t* sb) {
     sb->used   = 1;
 
     while (read(fd, &ch, 1) != 0) {
-        sb_append(sb, ch);
+        sb_append(sb, tolower(ch));
     }
 
     if (fd > 2) {
@@ -119,31 +142,29 @@ void destroyList(struct llnode* list) {
         free(curr);
         curr = next;
     }
+
     list = NULL;
 }
 
 int main(int argc, char** argv) {
     int i = 0;
     int fd_in;
-
     fd_in = open(argv[1], O_RDONLY);
-
     struct strbuff_t sb;
     struct llnode* list = NULL;
-    
     charArray(fd_in, &sb);
-    printf("%s\n", sb.data);
-
+    printf("-------\nInput Text:\n%s\n-------\n", sb.data);
     struct strbuff_t temp;
     temp.data = malloc(sizeof(char));
     temp.data[0] = '\0';
     temp.length = 1;
     temp.used = 1;
 
-    while (i < sb.used - 1) {
-        if ((!ispunct(sb.data[i]) && !isspace(sb.data[i])) || sb.data[i] == '-') { // if it's not a whitespace, punct, or is a hypen, enter this
+    while (i < sb.used) {
+
+        if ((!ispunct(sb.data[i]) && !isspace(sb.data[i]) && !(sb.data[i] == '\0')) || sb.data[i] == '-') { // if it's not a whitespace, punct, or is a hypen, enter this
             sb_append(&temp, sb.data[i]);
-        } else if (isspace(sb.data[i])) {
+        } else if (isspace(sb.data[i]) || sb.data[i] == '\0') {
             list = insertNode(list, &temp);
             free(temp.data); // reset the temp stuct values
             temp.data = malloc(sizeof(char));
@@ -154,7 +175,7 @@ int main(int argc, char** argv) {
 
         i++;
     }
-    
+
     printList(list);
     sb_destroy(temp.data);
     sb_destroy(sb.data);
