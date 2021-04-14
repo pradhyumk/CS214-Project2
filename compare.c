@@ -52,12 +52,13 @@ void printWFDList(struct fileRepository* list) {
     while (file != NULL) {
         printf("File Name: %s\n", file->fileName);
         struct llnode* word = file->list;
-        while (word != NULL) {        
+
+        while (word != NULL) {
             printf("%s | %d | %f -->  ", word->word, word->occurence, word->frequency);
             word = word->next;
         }
-        printf("\n");
 
+        printf("\n");
         file = file->nextFile;
     }
 
@@ -93,7 +94,6 @@ struct llnode* insertNode(struct llnode* list, struct strbuff_t* sb) {
         list->next = NULL;
         list->word = malloc(sizeof(char) * (sb->used + 1));
         strncpy(list->word, sb->data, (sb->used + 1));
-
         return list;
     } // Something is in the list
 
@@ -142,14 +142,15 @@ struct llnode* insertNode(struct llnode* list, struct strbuff_t* sb) {
 }
 
 void updateFrequencies(struct llnode** list) {
-    if (*list == NULL){
+    if (*list == NULL) {
         return;
     }
 
     // go through whole list and increase counter to get the number of nodes
-    // go through whole list again and just make freq = occ / total nodes 
+    // go through whole list again and just make freq = occ / total nodes
     int total_num = 0;
-    struct llnode *cur = *list;
+    struct llnode* cur = *list;
+
     while (cur != NULL) {
         total_num += cur->occurence;
         cur = cur->next;
@@ -158,16 +159,14 @@ void updateFrequencies(struct llnode** list) {
     cur = *list;
 
     while (cur != NULL) {
-        cur->frequency = (double) cur->occurence/total_num;
+        cur->frequency = (double) cur->occurence / total_num;
         cur = cur->next;
     }
 
     return;
-
 }
 
 struct fileRepository* insertWFD(struct fileRepository* fileList, struct llnode* wordList, char* fName) {
-
     if (fileList == NULL) { // if there are no WFD structs yet
         fileList = malloc(sizeof(struct fileRepository));
         fileList->fileName = (char*) malloc(sizeof(char) * (strlen(fName) + 1));
@@ -185,11 +184,15 @@ struct fileRepository* insertWFD(struct fileRepository* fileList, struct llnode*
     }
 
     struct fileRepository* temp = malloc(sizeof(struct fileRepository));
-        
+
     temp->totalNodes = 0;
+
     temp->fileName = malloc(sizeof(char) * (strlen(fName) + 1));
+
     strcpy(temp->fileName, fName);
+
     temp->nextFile = NULL;
+
     temp->list = wordList;
 
     curr->nextFile = temp;
@@ -216,9 +219,9 @@ struct strbuff_t* charArray(int fd, struct  strbuff_t* sb) {
 }
 
 void destroyList(struct fileRepository* fileStruct) {
-
     struct fileRepository* curr = fileStruct;
     struct fileRepository* next = NULL;
+
     while (curr != NULL) {
         struct llnode* c = curr->list;
         struct llnode* n = NULL;
@@ -229,6 +232,7 @@ void destroyList(struct fileRepository* fileStruct) {
             free(c);
             c = n;
         }
+
         free(curr->fileName);
         next = curr->nextFile;
         free(curr);
@@ -238,14 +242,12 @@ void destroyList(struct fileRepository* fileStruct) {
 
 
 
-struct llnode* analyzeText(int fd_in){
+struct llnode* analyzeText(int fd_in) {
     int i = 0;
-
     struct strbuff_t sb;
     struct llnode* list = NULL;
     charArray(fd_in, &sb);
     printf("-------\nInput Text:\n%s\n-------\n", sb.data);
-
     struct strbuff_t temp;
     temp.data = malloc(sizeof(char));
     temp.data[0] = '\0';
@@ -253,7 +255,6 @@ struct llnode* analyzeText(int fd_in){
     temp.used = 1;
 
     while (i < sb.used) {
-
         if ((!ispunct(sb.data[i]) && !isspace(sb.data[i]) && !(sb.data[i] == '\0')) || sb.data[i] == '-') { // if it's not a whitespace, punct, or is a hypen, enter this
             sb_append(&temp, sb.data[i]);
         } else if ((isspace(sb.data[i]) || sb.data[i] == '\0') && temp.data[0] != '\0') {
@@ -271,62 +272,55 @@ struct llnode* analyzeText(int fd_in){
     updateFrequencies(&list);
     sb_destroy(temp.data);
     sb_destroy(sb.data);
-
     return list;
 }
 
 
 
 int main(int argc, char** argv) {
-
     int d = 1; // four arguments with default values
     int f = 1;
     int a = 1;
     char* suffix = malloc(sizeof(char) *  5);
     strcpy(suffix, ".txt");
-
     struct fileRepository* fileList = NULL;
 
     for (int i = 1; i < argc; i++) {
-        
         char* temp;
 
         if (argv[i][0] == '-') { // if its a optional argument
             if (argv[i][1] == 'd') {
                 temp = malloc(sizeof(char) * strlen(argv[i]));
-                strncpy(temp, &argv[i][2], strlen(argv[i])-1);
+                strncpy(temp, &argv[i][2], strlen(argv[i]) - 1);
                 d = atoi(temp);
                 free(temp);
             } else if (argv[i][1] == 'f') {
                 temp = malloc(sizeof(char) * strlen(argv[i]));
-                strncpy(temp, &argv[i][2], strlen(argv[i])-1);
+                strncpy(temp, &argv[i][2], strlen(argv[i]) - 1);
                 f = atoi(temp);
                 free(temp);
             } else if (argv[i][1] == 'a') {
                 temp = malloc(sizeof(char) * strlen(argv[i]));
-                strncpy(temp, &argv[i][2], strlen(argv[i])-1);
+                strncpy(temp, &argv[i][2], strlen(argv[i]) - 1);
                 a = atoi(temp);
                 free(temp);
-            } else if (argv[i][1] == 's') {     
+            } else if (argv[i][1] == 's') {
                 suffix = realloc(suffix, sizeof(char) * strlen(argv[i]));
-                strncpy(suffix, &argv[i][2], strlen(argv[i])-1);
+                strncpy(suffix, &argv[i][2], strlen(argv[i]) - 1);
             } else {
                 continue;
             }
-
-        } else { 
+        } else {
             int fd_in = open(argv[i], O_RDONLY);
             struct llnode* tempList = analyzeText(fd_in);
             // printList(tempList);
-
             // printf("File: %s\n", argv[i]);
-            
             fileList = insertWFD(fileList, tempList, argv[i]);
         }
     }
+
     printWFDList(fileList);
     printf("-d: %d | -f: %d | -a: %d | -s: %s\n", d, f, a, suffix);
-    
     free(suffix);
     destroyList(fileList);
     return EXIT_SUCCESS;
