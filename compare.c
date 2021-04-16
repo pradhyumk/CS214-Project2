@@ -7,6 +7,9 @@
 #include <fcntl.h>
 #include <string.h>
 #include <pthread.h>
+#include <dirent.h>
+
+#define queueSize 20
 
 struct strbuff_t {
     size_t length;
@@ -28,6 +31,13 @@ struct fileRepository {
     struct fileRepository* nextFile;
 };
 
+struct JSDStruct {
+    struct fileRepository* file1;
+    struct fileRepository* file2;
+    int totalNodes;
+    float distance;
+};
+
 typedef struct {
     char** queue;
     unsigned count;
@@ -38,10 +48,17 @@ typedef struct {
     pthread_cond_t write_ready;
 } queue_t;
 
-int init(queue_t* Q) {
-    Q->queue = malloc (sizeof(char*) * 1);
+struct targs {
+	queue_t *directoryQueue;
+    queue_t *fileQueue;
+    struct fileRepository* fileList;
+};
 
-    for (int i = 0; i < 1; i++) {
+
+int init(queue_t* Q) {
+    Q->queue = malloc (sizeof(char*) * queueSize);
+
+    for (int i = 0; i < queueSize; i++) {
         Q->queue[i] = malloc(sizeof(char));
     }
 
@@ -55,7 +72,7 @@ int init(queue_t* Q) {
 }
 
 int destroy(queue_t* Q) {
-    for (int i = 0; i < 1; i++) {
+    for (int i = 0; i < queueSize; i++) {
         free(Q->queue[i]);
     }
 
@@ -69,7 +86,7 @@ int destroy(queue_t* Q) {
 int enqueue(queue_t* Q, char* item) {
     pthread_mutex_lock(&Q->lock);
 
-    while (Q->count == 1 && Q->open) { // if the queue is full
+    while (Q->count == queueSize && Q->open) { // if the queue is full
         pthread_cond_wait(&Q->write_ready, &Q->lock);
     }
 
@@ -80,11 +97,10 @@ int enqueue(queue_t* Q, char* item) {
 
     unsigned i = Q->head + Q->count;
 
-    if (i >= 1) i -= 1;
+    if (i >= queueSize) i -= queueSize;
 
     Q->queue[i] = realloc(Q->queue[i], sizeof(char) * strlen(item) + 1);
     strcpy(Q->queue[i], item);
-//	Q->queue[i] = item;
     ++Q->count;
     pthread_cond_signal(&Q->read_ready);
     pthread_mutex_unlock(&Q->lock);
@@ -93,7 +109,7 @@ int enqueue(queue_t* Q, char* item) {
 
 char* dequeue(queue_t* Q) {
     pthread_mutex_lock(&Q->lock);
-
+    printf("From the function, the thread id = %ld\n", pthread_self());
     while (Q->count == 0 && Q->open) {
         pthread_cond_wait(&Q->read_ready, &Q->lock);
     }
@@ -104,11 +120,12 @@ char* dequeue(queue_t* Q) {
     }
 
     char* ptr = malloc(sizeof(char) * (strlen(Q->queue[Q->head]) + 1));
-    strcpy(ptr, Q->queue[Q->head]) ;
+    strcpy(ptr, Q->queue[Q->head]);
+    
     --Q->count;
     ++Q->head;
 
-    if (Q->head == 1) Q->head = 0;
+    if (Q->head == queueSize) Q->head = 0;
 
     pthread_cond_signal(&Q->write_ready);
     pthread_mutex_unlock(&Q->lock);
@@ -147,6 +164,7 @@ void printWFDList(struct fileRepository* list) {
 
     while (file != NULL) {
         printf("File Name: %s\n", file->fileName);
+        printf("Total Tokens: %d\n", file->totalNodes);
         struct llnode* word = file->list;
 
         while (word != NULL) {
@@ -164,7 +182,7 @@ void printWFDList(struct fileRepository* list) {
 void printQueue(queue_t* Q) {
     printf("Printing what's in the queue...");
 
-    for (int i = 0; i < 1; i++) {
+    for (int i = 0; i < 6; i++) {
         printf("%s <= ", Q->queue[i]);
     }
 
@@ -378,6 +396,156 @@ struct llnode* analyzeText(int fd_in) {
     return list;
 }
 
+struct fileRepository* updateTokens(struct fileRepository* fileList) {
+    if (fileList == NULL) {
+        return fileList;
+    }
+
+    struct fileRepository* ptr = fileList;
+
+    while (ptr != NULL) {
+        int total_num = 0;
+        struct llnode* cur = ptr->list;
+
+        while (cur != NULL) {
+            total_num += cur->occurence;
+            cur = cur->next;
+        }
+    
+        ptr->totalNodes = total_num;
+        ptr = ptr->nextFile;
+    }
+
+    return fileList;
+}
+
+void* directory_thread(void *arg) {
+
+    struct targs *args = arg;
+
+    while (args->directoryQueue->count != 0) {
+        char* directoryName = dequeue(args->directoryQueue); // files
+
+        DIR *dirp = opendir(directoryName);  
+        struct dirent *de;
+
+        while ((de = readdir(dirp))) {
+            
+            char* path;
+            
+            if (de->d_type == DT_REG) {	 // if its a file
+                path = malloc(sizeof(char) * (strlen(directoryName) + 1 + strlen(de->d_name) + 1));
+                path[0] = '\0';
+                strcat(path, directoryName);
+                strcat(path, "/");
+                strcat(path, de->d_name);
+
+                printf("Concatenated Path: %s\n", path);
+                enqueue(args->fileQueue, path);
+                free(path);
+            } else if (de->d_type == DT_DIR && !((strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0))) { // if its a directory
+                path = malloc(sizeof(char)* (strlen(directoryName) + 1 + strlen(de->d_name) + 1));
+                path[0] = '\0';
+
+                strcat(path, directoryName);
+                strcat(path, "/");
+                strcat(path, de->d_name);
+                
+                printf("Concatenated Path: %s\n", path);
+                enqueue(args->directoryQueue, path);
+                free(path);
+            }
+        }
+        
+        free(directoryName);
+        closedir(dirp);
+    }
+
+    return NULL;
+}
+
+void* file_thread(void *arg) {
+    struct targs *args = arg;
+    
+    while (args->fileQueue->count != 0) {
+        char *fName = dequeue(args->fileQueue);
+        printf("Dequeued: %s\n", fName);
+        
+        int fd_in = open(fName, O_RDONLY);
+        struct llnode* tempList = analyzeText(fd_in);
+        args->fileList = insertWFD(args->fileList, tempList,fName);
+        args->fileList = updateTokens(args->fileList);
+        free(fName);
+    }
+
+
+    return NULL;
+}
+
+
+float getWordFrequency(struct llnode* list, char *word) {
+    struct llnode* curr = list;
+
+    while(curr->next != NULL){
+        if (strcmp(curr->word, word) == 0){
+            return curr->frequency;
+        }
+        
+        curr = curr->next;
+    }
+
+    return 0.00;
+}
+
+
+float computeJSD(struct fileRepository* fileList, struct fileRepository* fileList2) {
+    // test.txt -> test.txt -> test3.txt ...
+    int totalTokens = fileList->totalNodes + fileList2->totalNodes;
+
+    struct llnode* list1 = fileList->list;
+    struct llnode* list2 = fileList2->list;
+
+    // f1: hi .5  there .5
+    // f2: hi .5  there .25  out .25
+    
+    // m:  hi .5  there .375 out .125
+
+    float kld1 =  0;
+    float kld2 = 0;
+
+    while (list1 != NULL) {
+        char* firstWord = list1->word;
+        list2 = fileList2->list;
+        while (list2 != NULL) {
+            char* secondWord = list2->word;
+
+            if (strcmp(firstWord, secondWord) == 0) { // same word, so compute JSD
+                 // we have both words now
+                float f1 = getWordFrequency(list1, firstWord);
+                float f2 = getWordFrequency(list2, secondWord);
+
+                float meanF = (f1 + f2) / 2;
+
+                // KLD for file 1
+                for(int k = 0; k < fileList->totalNodes; k++){
+
+                    kld1 +=                 
+
+
+                }
+                
+            } 
+            
+            list2 = list2->next;
+        }
+
+        list1 = list1->next;
+    }
+}
+
+void* analysis_thread(void* arg) {
+    // two for loops
+}
 
 int main(int argc, char** argv) {
     int d = 1; // four arguments with default values
@@ -435,31 +603,47 @@ int main(int argc, char** argv) {
                     return EXIT_FAILURE;
                 }
 
-                struct llnode* tempList = analyzeText(fd_in);
-
-                fileList = insertWFD(fileList, tempList, argv[i]);
-
                 enqueue(&fileQueue, argv[i]);
-
-                printQueue(&fileQueue);
-
-                char* ptr = dequeue(&fileQueue);
-
-                printf("File dequeued: %s\n", ptr);
-
-                free(ptr);
             } else if (dir_check == 1) { // if it's a directory
-                // printf("The folder (%s) is a directory\n", argv[i]);
                 enqueue(&directoryQueue, argv[i]);
             }
         }
-
-        // threads
     }
 
-    printWFDList(fileList);
+    struct targs *args;
+    args = malloc(sizeof(struct targs));
+    args->directoryQueue = &directoryQueue;
+    args->fileQueue = &fileQueue;
+    args->fileList = fileList;
+
+    pthread_t dtid[d];
+    pthread_t ftid[f];
+
+    for (int k = 0; k < d; k++) {
+        pthread_create(&dtid[k], NULL, directory_thread, args);
+    }
+    
+    for (int j = 0; j < d; j++) {
+        pthread_join(dtid[j], NULL);
+    }
+
+    for (int k = 0; k < f; k++) {
+        pthread_create(&ftid[k], NULL, file_thread, args);
+    }
+    
+    for (int j = 0; j < f; j++) {
+        pthread_join(ftid[j], NULL);
+    }
+    
+    printQueue(&fileQueue);
+
+    // start analysis phase
+
+    printWFDList(args->fileList);
     printf("-d: %d | -f: %d | -a: %d | -s: %s\n", d, f, a, suffix);
     free(suffix);
+    destroyList(args->fileList);
+    free(args);
     destroyList(fileList);
     destroy(&directoryQueue);
     destroy(&fileQueue);

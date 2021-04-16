@@ -1,2 +1,6 @@
 .vscode/*
 *.out
+files/*
+.vsls.json
+test.txt
+test2.txt
