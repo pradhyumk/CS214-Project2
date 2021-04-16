@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <string.h>
+#include <pthread.h>
 
 struct strbuff_t {
     size_t length;
@@ -27,6 +28,101 @@ struct fileRepository {
     struct fileRepository* nextFile;
 };
 
+typedef struct {
+    char** queue;
+    unsigned count;
+    unsigned head;
+    int open;
+    pthread_mutex_t lock;
+    pthread_cond_t read_ready;
+    pthread_cond_t write_ready;
+} queue_t;
+
+int init(queue_t* Q) {
+    Q->queue = malloc (sizeof(char*) * 1);
+
+    for (int i = 0; i < 1; i++) {
+        Q->queue[i] = malloc(sizeof(char));
+    }
+
+    Q->count = 0;
+    Q->head = 0;
+    Q->open = 1;
+    pthread_mutex_init(&Q->lock, NULL);
+    pthread_cond_init(&Q->read_ready, NULL);
+    pthread_cond_init(&Q->write_ready, NULL);
+    return 0;
+}
+
+int destroy(queue_t* Q) {
+    for (int i = 0; i < 1; i++) {
+        free(Q->queue[i]);
+    }
+
+    free(Q->queue);
+    pthread_mutex_destroy(&Q->lock);
+    pthread_cond_destroy(&Q->read_ready);
+    pthread_cond_destroy(&Q->write_ready);
+    return 0;
+}
+
+int enqueue(queue_t* Q, char* item) {
+    pthread_mutex_lock(&Q->lock);
+
+    while (Q->count == 1 && Q->open) { // if the queue is full
+        pthread_cond_wait(&Q->write_ready, &Q->lock);
+    }
+
+    if (!Q->open) {
+        pthread_mutex_unlock(&Q->lock);
+        return -1;
+    }
+
+    unsigned i = Q->head + Q->count;
+
+    if (i >= 1) i -= 1;
+
+    Q->queue[i] = realloc(Q->queue[i], sizeof(char) * strlen(item) + 1);
+    strcpy(Q->queue[i], item);
+//	Q->queue[i] = item;
+    ++Q->count;
+    pthread_cond_signal(&Q->read_ready);
+    pthread_mutex_unlock(&Q->lock);
+    return 0;
+}
+
+char* dequeue(queue_t* Q) {
+    pthread_mutex_lock(&Q->lock);
+
+    while (Q->count == 0 && Q->open) {
+        pthread_cond_wait(&Q->read_ready, &Q->lock);
+    }
+
+    if (Q->count == 0) {
+        pthread_mutex_unlock(&Q->lock);
+        return (char*) -1;
+    }
+
+    char* ptr = malloc(sizeof(char) * (strlen(Q->queue[Q->head]) + 1));
+    strcpy(ptr, Q->queue[Q->head]) ;
+    --Q->count;
+    ++Q->head;
+
+    if (Q->head == 1) Q->head = 0;
+
+    pthread_cond_signal(&Q->write_ready);
+    pthread_mutex_unlock(&Q->lock);
+    return ptr;
+}
+
+int qclose(queue_t* Q) {
+    pthread_mutex_lock(&Q->lock);
+    Q->open = 0;
+    pthread_cond_broadcast(&Q->read_ready);
+    pthread_cond_broadcast(&Q->write_ready);
+    pthread_mutex_unlock(&Q->lock);
+    return 0;
+}
 
 void printList(struct llnode* list) {
     printf("Words List\n");
@@ -65,6 +161,15 @@ void printWFDList(struct fileRepository* list) {
     printf("\n");
 }
 
+void printQueue(queue_t* Q) {
+    printf("Printing what's in the queue...");
+
+    for (int i = 0; i < 1; i++) {
+        printf("%s <= ", Q->queue[i]);
+    }
+
+    printf("\n");
+}
 
 void sb_destroy(char* L) {
     free(L);
@@ -240,8 +345,6 @@ void destroyList(struct fileRepository* fileStruct) {
     }
 }
 
-
-
 struct llnode* analyzeText(int fd_in) {
     int i = 0;
     struct strbuff_t sb;
@@ -276,7 +379,6 @@ struct llnode* analyzeText(int fd_in) {
 }
 
 
-
 int main(int argc, char** argv) {
     int d = 1; // four arguments with default values
     int f = 1;
@@ -284,6 +386,10 @@ int main(int argc, char** argv) {
     char* suffix = malloc(sizeof(char) *  5);
     strcpy(suffix, ".txt");
     struct fileRepository* fileList = NULL;
+    queue_t directoryQueue;
+    init(&directoryQueue);
+    queue_t fileQueue;
+    init(&fileQueue);
 
     for (int i = 1; i < argc; i++) {
         char* temp;
@@ -311,17 +417,51 @@ int main(int argc, char** argv) {
                 continue;
             }
         } else {
-            int fd_in = open(argv[i], O_RDONLY);
-            struct llnode* tempList = analyzeText(fd_in);
-            // printList(tempList);
-            // printf("File: %s\n", argv[i]);
-            fileList = insertWFD(fileList, tempList, argv[i]);
+            struct stat file_stat;
+
+            if (stat(argv[i], &file_stat) != 0) {
+                perror("Error");
+                return EXIT_FAILURE;
+            }
+
+            int dir_check = S_ISDIR(file_stat.st_mode); // 0 is File, 1 is Directory
+            printf("Arg: %s | dir check: %d\n", argv[i], dir_check);
+
+            if (dir_check == 0) { // just a regular file  was passed in
+                int fd_in = open(argv[i], O_RDONLY);
+
+                if (fd_in == -1) {
+                    perror("Error");
+                    return EXIT_FAILURE;
+                }
+
+                struct llnode* tempList = analyzeText(fd_in);
+
+                fileList = insertWFD(fileList, tempList, argv[i]);
+
+                enqueue(&fileQueue, argv[i]);
+
+                printQueue(&fileQueue);
+
+                char* ptr = dequeue(&fileQueue);
+
+                printf("File dequeued: %s\n", ptr);
+
+                free(ptr);
+            } else if (dir_check == 1) { // if it's a directory
+                // printf("The folder (%s) is a directory\n", argv[i]);
+                enqueue(&directoryQueue, argv[i]);
+            }
         }
+
+        // threads
     }
 
     printWFDList(fileList);
     printf("-d: %d | -f: %d | -a: %d | -s: %s\n", d, f, a, suffix);
     free(suffix);
     destroyList(fileList);
+    destroy(&directoryQueue);
+    destroy(&fileQueue);
     return EXIT_SUCCESS;
 }
