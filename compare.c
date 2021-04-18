@@ -8,6 +8,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <dirent.h>
+#include <math.h>
 
 #define queueSize 20
 
@@ -32,10 +33,11 @@ struct fileRepository {
 };
 
 struct JSDStruct {
-    struct fileRepository* file1;
-    struct fileRepository* file2;
-    int totalNodes;
+    char* file1;
+    char* file2;
+    int totalTokens;
     float distance;
+    struct JSDStruct* nextStruct;
 };
 
 typedef struct {
@@ -52,8 +54,33 @@ struct targs {
 	queue_t *directoryQueue;
     queue_t *fileQueue;
     struct fileRepository* fileList;
+    struct JSDStruct* jsdStruct;
 };
 
+int init(queue_t* Q);
+int destroy(queue_t* Q);
+int enqueue(queue_t* Q, char* item);
+char* dequeue(queue_t* Q);
+int qclose(queue_t* Q);
+void printList(struct llnode* list);
+void printWFDList(struct fileRepository* list);
+void printQueue(queue_t* Q);
+void sb_destroy(char* L);
+int sb_append(struct strbuff_t* sb, char item);
+struct llnode* insertNode(struct llnode* list, struct strbuff_t* sb);
+void updateFrequencies(struct llnode** list);
+struct fileRepository* insertWFD(struct fileRepository* fileList, struct llnode* wordList, char* fName);
+struct strbuff_t* charArray(int fd, struct  strbuff_t* sb);
+void destroyList(struct fileRepository* fileStruct);
+struct llnode* analyzeText(int fd_in);
+struct fileRepository* updateTokens(struct fileRepository* fileList);
+void* directory_thread(void *arg);
+void* file_thread(void *arg);
+float getWordFrequency(struct llnode* list, char *word);
+float getMeanFrequency(struct llnode* list1, struct llnode* list2, char* word);
+float computeJSD(struct fileRepository* fileList, struct fileRepository* fileList2);
+struct JSDStruct* insertJSDStruct(struct JSDStruct* jsdStruct, char* f1, char* f2, int totalNodes, float jsd);
+void* analysis_thread(void* arg);
 
 int init(queue_t* Q) {
     Q->queue = malloc (sizeof(char*) * queueSize);
@@ -69,6 +96,29 @@ int init(queue_t* Q) {
     pthread_cond_init(&Q->read_ready, NULL);
     pthread_cond_init(&Q->write_ready, NULL);
     return 0;
+}
+
+void destroyJSDList(struct JSDStruct* jsdStruct) {
+    struct JSDStruct* curr = jsdStruct;
+    struct JSDStruct* next = NULL;
+
+    while (curr != NULL) {
+        free(curr->file1);
+        free(curr->file2);
+        next = curr->nextStruct;
+        free(curr);
+        curr = next;
+    }
+}
+
+void printJSDList(struct JSDStruct* jsdStruct) {
+    struct JSDStruct* curr = jsdStruct;
+
+    while (curr != NULL) {
+        printf("%lf %s %s\n", curr->distance, curr->file1, curr->file2);
+        curr = curr->nextStruct;
+    }
+    printf("\n");
 }
 
 int destroy(queue_t* Q) {
@@ -182,7 +232,7 @@ void printWFDList(struct fileRepository* list) {
 void printQueue(queue_t* Q) {
     printf("Printing what's in the queue...");
 
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 2; i++) {
         printf("%s <= ", Q->queue[i]);
     }
 
@@ -497,54 +547,150 @@ float getWordFrequency(struct llnode* list, char *word) {
     return 0.00;
 }
 
+float getMeanFrequency(struct llnode* list1, struct llnode* list2, char* word) {
+    float freq1 = getWordFrequency(list1, word);
+    float freq2 = getWordFrequency(list2, word);
+
+    float meanF = (freq1 + freq2) / 2;
+
+    return meanF;
+}
+
 
 float computeJSD(struct fileRepository* fileList, struct fileRepository* fileList2) {
-    // test.txt -> test.txt -> test3.txt ...
-    int totalTokens = fileList->totalNodes + fileList2->totalNodes;
-
+    
     struct llnode* list1 = fileList->list;
     struct llnode* list2 = fileList2->list;
+
+    printList(list1);
+    printList(list2);
 
     // f1: hi .5  there .5
     // f2: hi .5  there .25  out .25
     
     // m:  hi .5  there .375 out .125
 
-    float kld1 =  0;
-    float kld2 = 0;
+    float kld1 = 0.0; 
+    float kld2 = 0.0;
 
-    while (list1 != NULL) {
-        char* firstWord = list1->word;
-        list2 = fileList2->list;
-        while (list2 != NULL) {
-            char* secondWord = list2->word;
-
-            if (strcmp(firstWord, secondWord) == 0) { // same word, so compute JSD
-                 // we have both words now
-                float f1 = getWordFrequency(list1, firstWord);
-                float f2 = getWordFrequency(list2, secondWord);
-
-                float meanF = (f1 + f2) / 2;
-
-                // KLD for file 1
-                for(int k = 0; k < fileList->totalNodes; k++){
-
-                    kld1 +=                 
-
-
-                }
-                
-            } 
-            
-            list2 = list2->next;
-        }
-
+    // first list:
+    while(list1 != NULL) {
+        kld1 += list1->frequency * log2(list1->frequency/(getMeanFrequency(fileList->list, fileList2->list, list1->word)));
         list1 = list1->next;
     }
+
+    while(list2 != NULL){
+        kld2 += list2->frequency * log2(list2->frequency/(getMeanFrequency(fileList->list, fileList2->list, list2->word)));
+        list2 = list2->next;
+    }
+
+    float jsd = sqrt((0.5 * kld1) + (0.5 * kld2));
+    printf("JSD Distance: %f\n", jsd);
+    
+    return jsd;
 }
 
+struct JSDStruct* insertJSDStruct(struct JSDStruct* jsdStruct, char* f1, char* f2, int totalNodes, float jsd) {
+    if (jsdStruct == NULL) {    // adding fist node
+        jsdStruct = malloc(sizeof(struct JSDStruct));
+
+        printf("F1: %s | F2: %s | %ld %ld\n", f1, f2, strlen(f1), strlen(f2));
+
+        jsdStruct->file1 = malloc(sizeof(char) * (strlen(f1) + 1));
+        jsdStruct->file2 = malloc(sizeof(char) * (strlen(f2) + 1));
+
+        strcpy(jsdStruct->file1, f1);
+        strcpy(jsdStruct->file2, f2);
+        jsdStruct->totalTokens = totalNodes;
+        jsdStruct->distance = jsd;
+        jsdStruct->nextStruct = NULL;
+
+        return jsdStruct;
+    }
+
+    struct JSDStruct* curr = jsdStruct;
+    struct JSDStruct* prev = NULL;
+    
+    // 250 170 150 150 25
+
+    while (curr != 0) {
+        if (curr->totalTokens <= totalNodes) { //insert to the left of it
+            if (prev == NULL){ // We are at the root node
+                struct JSDStruct* temp  = malloc(sizeof(struct JSDStruct));
+
+                temp->file1 = malloc(sizeof(char) * (strlen(f1) + 1));
+                temp->file2 = malloc(sizeof(char) * (strlen(f2) + 1));
+
+                strcpy(temp->file1, f1);
+                strcpy(temp->file2, f2);
+                temp->totalTokens = totalNodes;
+                temp->distance = jsd;
+                temp->nextStruct = curr;
+
+                return temp;
+            } else {
+                struct JSDStruct* temp  = malloc(sizeof(struct JSDStruct));
+
+                temp->file1 = malloc(sizeof(char) * (strlen(f1) + 1));
+                temp->file2 = malloc(sizeof(char) * (strlen(f2) + 1));
+
+                strcpy(temp->file1, f1);
+                strcpy(temp->file2, f2);
+                temp->totalTokens = totalNodes;
+                temp->distance = jsd;
+                temp->nextStruct = curr;
+
+                prev->nextStruct = temp;
+
+                return jsdStruct;
+            }
+
+        
+        } else if (curr->totalTokens > totalNodes && curr->nextStruct == NULL) {
+                struct JSDStruct* temp  = malloc(sizeof(struct JSDStruct));
+
+                temp->file1 = malloc(sizeof(char) * (strlen(f1) + 1));
+                temp->file2 = malloc(sizeof(char) * (strlen(f2) + 1));
+
+                strcpy(temp->file1, f1);
+                strcpy(temp->file2, f2);
+                temp->totalTokens = totalNodes;
+                temp->distance = jsd;
+                temp->nextStruct = curr;
+                curr->nextStruct = temp;
+
+                return jsdStruct;
+            
+        }
+
+        prev = curr;
+        curr = curr->nextStruct;
+
+    }
+    
+    return jsdStruct;
+}
+
+
 void* analysis_thread(void* arg) {
-    // two for loops
+    struct targs *args = arg;
+
+    struct fileRepository* currentFile = args->fileList;
+    struct fileRepository* nextFile = args->fileList->nextFile;
+
+    printf("File1: %s | File2: %s\n", currentFile->fileName, nextFile->fileName);
+
+    while (currentFile != NULL) {
+        while (nextFile != NULL) {
+            float jsd = computeJSD(currentFile, nextFile);
+            args->jsdStruct = insertJSDStruct(args->jsdStruct, currentFile->fileName, nextFile->fileName, (currentFile->totalNodes + nextFile->totalNodes), jsd);
+            nextFile = nextFile->nextFile;
+        }
+
+        currentFile = currentFile->nextFile;
+    }
+
+    return NULL;
 }
 
 int main(int argc, char** argv) {
@@ -558,6 +704,7 @@ int main(int argc, char** argv) {
     init(&directoryQueue);
     queue_t fileQueue;
     init(&fileQueue);
+    struct JSDStruct* jsdStru = NULL;
 
     for (int i = 1; i < argc; i++) {
         char* temp;
@@ -615,6 +762,7 @@ int main(int argc, char** argv) {
     args->directoryQueue = &directoryQueue;
     args->fileQueue = &fileQueue;
     args->fileList = fileList;
+    args->jsdStruct = jsdStru;
 
     pthread_t dtid[d];
     pthread_t ftid[f];
@@ -634,6 +782,16 @@ int main(int argc, char** argv) {
     for (int j = 0; j < f; j++) {
         pthread_join(ftid[j], NULL);
     }
+
+    for (int k = 0; k < a; k++) {
+        pthread_create(&ftid[k], NULL, analysis_thread, args);
+    }
+    
+    for (int j = 0; j < a; j++) {
+        pthread_join(ftid[j], NULL);
+    }
+
+    
     
     printQueue(&fileQueue);
 
@@ -641,11 +799,13 @@ int main(int argc, char** argv) {
 
     printWFDList(args->fileList);
     printf("-d: %d | -f: %d | -a: %d | -s: %s\n", d, f, a, suffix);
+    printJSDList(args->jsdStruct);
     free(suffix);
     destroyList(args->fileList);
     free(args);
     destroyList(fileList);
     destroy(&directoryQueue);
     destroy(&fileQueue);
+    destroyJSDList(args->jsdStruct);
     return EXIT_SUCCESS;
 }
