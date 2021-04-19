@@ -10,7 +10,7 @@
 #include <dirent.h>
 #include <math.h>
 
-#define queueSize 20
+#define queueSize 2
 
 struct strbuff_t {
     size_t length;
@@ -55,6 +55,7 @@ struct targs {
     queue_t *fileQueue;
     struct fileRepository* fileList;
     struct JSDStruct* jsdStruct;
+    char* suffix;
 };
 
 int init(queue_t* Q);
@@ -492,7 +493,16 @@ void* directory_thread(void *arg) {
                 strcat(path, de->d_name);
 
                 printf("Concatenated Path: %s\n", path);
-                enqueue(args->fileQueue, path);
+
+                if (args->suffix[0] == '\0') { // all suffixs are allowed
+                    enqueue(args->fileQueue, path);
+                } else if (strlen(path) > strlen(args->suffix) && strcmp(&path[strlen(path) - strlen(args->suffix)], args->suffix) == 0) {
+                    printf("Works");
+                    enqueue(args->fileQueue, path);
+                }
+                
+
+                // enqueue(args->fileQueue, path);
                 free(path);
             } else if (de->d_type == DT_DIR && !((strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0))) { // if its a directory
                 path = malloc(sizeof(char)* (strlen(directoryName) + 1 + strlen(de->d_name) + 1));
@@ -552,7 +562,7 @@ float getMeanFrequency(struct llnode* list1, struct llnode* list2, char* word) {
     float freq1 = getWordFrequency(list1, word);
     float freq2 = getWordFrequency(list2, word);
 
-    printf("freq1: %f | freq2: %f\n", freq1, freq2);
+    //printf("freq1: %f | freq2: %f\n", freq1, freq2);
 
     float meanF = (freq1 + freq2) / 2;
 
@@ -565,34 +575,26 @@ float computeJSD(struct fileRepository* fileList, struct fileRepository* fileLis
     struct llnode* list1 = fileList->list;
     struct llnode* list2 = fileList2->list;
 
-    // printList(list1);
-    // printList(list2);
-
-    // f1: hi .5  there .5
-    // f2: hi .5  there .25  out .25
-    
-    // m:  hi .5  there .375 out .125
-
     float kld1 = 0.0; 
     float kld2 = 0.0;
 
     // first list:
     while(list1 != NULL) {
-        printf("Word: %s | List Frequency: %f | MeanFreq: %f\n", list1->word, list1->frequency, getMeanFrequency(fileList->list, fileList2->list, list1->word));
+      //  printf("Word: %s | List Frequency: %f | MeanFreq: %f\n", list1->word, list1->frequency, getMeanFrequency(fileList->list, fileList2->list, list1->word));
 
         kld1 += list1->frequency * log2(list1->frequency/(getMeanFrequency(fileList->list, fileList2->list, list1->word)));
         list1 = list1->next;
     }
 
     while(list2 != NULL){
-        printf("Word: %s | List Frequency: %f | MeanFreq: %f\n", list2->word, list2->frequency, getMeanFrequency(fileList->list, fileList2->list, list2->word));
+        //printf("Word: %s | List Frequency: %f | MeanFreq: %f\n", list2->word, list2->frequency, getMeanFrequency(fileList->list, fileList2->list, list2->word));
 
         kld2 += list2->frequency * log2(list2->frequency/(getMeanFrequency(fileList->list, fileList2->list, list2->word)));
         list2 = list2->next;
     }
 
     float jsd = sqrt((0.5 * kld1) + (0.5 * kld2));
-    printf("KLD1: %f | KLD2: %f | JSD Distance: %f\n", kld1, kld2, jsd);
+    // printf("KLD1: %f | KLD2: %f | JSD Distance: %f\n", kld1, kld2, jsd);
     
     return jsd;
 }
@@ -600,8 +602,6 @@ float computeJSD(struct fileRepository* fileList, struct fileRepository* fileLis
 struct JSDStruct* insertJSDStruct(struct JSDStruct* jsdStruct, char* f1, char* f2, int totalNodes, float jsd) {
     if (jsdStruct == NULL) {    // adding fist node
         jsdStruct = malloc(sizeof(struct JSDStruct));
-
-        //printf("F1: %s | F2: %s | %ld %ld\n", f1, f2, strlen(f1), strlen(f2));
 
         jsdStruct->file1 = malloc(sizeof(char) * (strlen(f1) + 1));
         jsdStruct->file2 = malloc(sizeof(char) * (strlen(f2) + 1));
@@ -663,7 +663,7 @@ struct JSDStruct* insertJSDStruct(struct JSDStruct* jsdStruct, char* f1, char* f
                 strcpy(temp->file2, f2);
                 temp->totalTokens = totalNodes;
                 temp->distance = jsd;
-                temp->nextStruct = curr;
+                temp->nextStruct = NULL;
                 curr->nextStruct = temp;
 
                 return jsdStruct;
@@ -685,9 +685,10 @@ void* analysis_thread(void* arg) {
     struct fileRepository* currentFile = args->fileList;
     struct fileRepository* nextFile = args->fileList->nextFile;
 
-    printf("File1: %s | File2: %s\n", currentFile->fileName, nextFile->fileName);
-
     while (currentFile != NULL) {
+        printf("File1: %s\n", currentFile->fileName);
+        nextFile = currentFile->nextFile;
+      
         while (nextFile != NULL) {
             float jsd = computeJSD(currentFile, nextFile);
             args->jsdStruct = insertJSDStruct(args->jsdStruct, currentFile->fileName, nextFile->fileName, (currentFile->totalNodes + nextFile->totalNodes), jsd);
@@ -742,8 +743,13 @@ int main(int argc, char** argv) {
             struct stat file_stat;
 
             if (stat(argv[i], &file_stat) != 0) {
+                // free(suffix);
+                // destroyList(fileList);
+                // destroy(&directoryQueue);
+                // destroy(&fileQueue);
                 perror("Error");
-                return EXIT_FAILURE;
+
+                continue;
             }
 
             int dir_check = S_ISDIR(file_stat.st_mode); // 0 is File, 1 is Directory
@@ -753,11 +759,25 @@ int main(int argc, char** argv) {
                 int fd_in = open(argv[i], O_RDONLY);
 
                 if (fd_in == -1) {
+                    // free(suffix);
+                    // destroyList(fileList);
+                    // destroy(&directoryQueue);
+                    // destroy(&fileQueue);
                     perror("Error");
-                    return EXIT_FAILURE;
+
+                    continue;
                 }
 
-                enqueue(&fileQueue, argv[i]);
+                // Pass in all of the optional parameters before main arguments
+                printf("Comparing: %s | %s\n", &argv[i][strlen(argv[i]) - strlen(suffix)], suffix);
+
+                if (suffix[0] == '\0') { // all suffixs are allowed
+                    enqueue(&fileQueue, argv[i]);
+                } else if (strlen(argv[i]) > strlen(suffix) && strcmp(&argv[i][strlen(argv[i]) - strlen(suffix)], suffix) == 0) {
+                    printf("Works");
+                    enqueue(&fileQueue, argv[i]);
+                }
+                
             } else if (dir_check == 1) { // if it's a directory
                 enqueue(&directoryQueue, argv[i]);
             }
@@ -770,9 +790,11 @@ int main(int argc, char** argv) {
     args->fileQueue = &fileQueue;
     args->fileList = fileList;
     args->jsdStruct = jsdStru;
+    args->suffix = suffix;
 
     pthread_t dtid[d];
     pthread_t ftid[f];
+    pthread_t atid[a];
 
     for (int k = 0; k < d; k++) {
         pthread_create(&dtid[k], NULL, directory_thread, args);
@@ -791,21 +813,18 @@ int main(int argc, char** argv) {
     }
 
     for (int k = 0; k < a; k++) {
-        pthread_create(&ftid[k], NULL, analysis_thread, args);
+        pthread_create(&atid[k], NULL, analysis_thread, args);
     }
     
     for (int j = 0; j < a; j++) {
-        pthread_join(ftid[j], NULL);
+        pthread_join(atid[j], NULL);
     }
 
-    
-    
-    printQueue(&fileQueue);
 
     // start analysis phase
 
     // printWFDList(args->fileList);
-    // printf("-d: %d | -f: %d | -a: %d | -s: %s\n", d, f, a, suffix);
+    printf("-d: %d | -f: %d | -a: %d | -s: %s\n", d, f, a, suffix);
     printJSDList(args->jsdStruct);
     free(suffix);
     destroyList(args->fileList);
