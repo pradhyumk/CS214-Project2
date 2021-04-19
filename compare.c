@@ -112,6 +112,7 @@ void destroyJSDList(struct JSDStruct* jsdStruct) {
 }
 
 void printJSDList(struct JSDStruct* jsdStruct) {
+    printf("Printing JSD Struct\n");
     struct JSDStruct* curr = jsdStruct;
 
     while (curr != NULL) {
@@ -536,7 +537,7 @@ void* file_thread(void *arg) {
 float getWordFrequency(struct llnode* list, char *word) {
     struct llnode* curr = list;
 
-    while(curr->next != NULL){
+    while(curr != NULL){
         if (strcmp(curr->word, word) == 0){
             return curr->frequency;
         }
@@ -551,6 +552,8 @@ float getMeanFrequency(struct llnode* list1, struct llnode* list2, char* word) {
     float freq1 = getWordFrequency(list1, word);
     float freq2 = getWordFrequency(list2, word);
 
+    printf("freq1: %f | freq2: %f\n", freq1, freq2);
+
     float meanF = (freq1 + freq2) / 2;
 
     return meanF;
@@ -562,8 +565,8 @@ float computeJSD(struct fileRepository* fileList, struct fileRepository* fileLis
     struct llnode* list1 = fileList->list;
     struct llnode* list2 = fileList2->list;
 
-    printList(list1);
-    printList(list2);
+    // printList(list1);
+    // printList(list2);
 
     // f1: hi .5  there .5
     // f2: hi .5  there .25  out .25
@@ -575,17 +578,21 @@ float computeJSD(struct fileRepository* fileList, struct fileRepository* fileLis
 
     // first list:
     while(list1 != NULL) {
+        printf("Word: %s | List Frequency: %f | MeanFreq: %f\n", list1->word, list1->frequency, getMeanFrequency(fileList->list, fileList2->list, list1->word));
+
         kld1 += list1->frequency * log2(list1->frequency/(getMeanFrequency(fileList->list, fileList2->list, list1->word)));
         list1 = list1->next;
     }
 
     while(list2 != NULL){
+        printf("Word: %s | List Frequency: %f | MeanFreq: %f\n", list2->word, list2->frequency, getMeanFrequency(fileList->list, fileList2->list, list2->word));
+
         kld2 += list2->frequency * log2(list2->frequency/(getMeanFrequency(fileList->list, fileList2->list, list2->word)));
         list2 = list2->next;
     }
 
     float jsd = sqrt((0.5 * kld1) + (0.5 * kld2));
-    printf("JSD Distance: %f\n", jsd);
+    printf("KLD1: %f | KLD2: %f | JSD Distance: %f\n", kld1, kld2, jsd);
     
     return jsd;
 }
@@ -594,7 +601,7 @@ struct JSDStruct* insertJSDStruct(struct JSDStruct* jsdStruct, char* f1, char* f
     if (jsdStruct == NULL) {    // adding fist node
         jsdStruct = malloc(sizeof(struct JSDStruct));
 
-        printf("F1: %s | F2: %s | %ld %ld\n", f1, f2, strlen(f1), strlen(f2));
+        //printf("F1: %s | F2: %s | %ld %ld\n", f1, f2, strlen(f1), strlen(f2));
 
         jsdStruct->file1 = malloc(sizeof(char) * (strlen(f1) + 1));
         jsdStruct->file2 = malloc(sizeof(char) * (strlen(f2) + 1));
@@ -797,15 +804,15 @@ int main(int argc, char** argv) {
 
     // start analysis phase
 
-    printWFDList(args->fileList);
-    printf("-d: %d | -f: %d | -a: %d | -s: %s\n", d, f, a, suffix);
+    // printWFDList(args->fileList);
+    // printf("-d: %d | -f: %d | -a: %d | -s: %s\n", d, f, a, suffix);
     printJSDList(args->jsdStruct);
     free(suffix);
     destroyList(args->fileList);
+    destroyJSDList(args->jsdStruct);
     free(args);
     destroyList(fileList);
     destroy(&directoryQueue);
     destroy(&fileQueue);
-    destroyJSDList(args->jsdStruct);
     return EXIT_SUCCESS;
 }
